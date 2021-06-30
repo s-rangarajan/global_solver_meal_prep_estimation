@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"runtime"
 	"sync"
 	"time"
@@ -43,8 +44,11 @@ func (s *SimpleLookupEstimator) EstimateMealPrepTimeWithContext(ctx context.Cont
 			go func() {
 				defer wg.Done()
 				for input := range computeChan {
+					log.Println("computing")
 					mealPrepEstimate, err := s.LookupMealPrepTimeWithContext(ctx, input.RestaurantID, input.ItemCount, input.DispatchTime)
+					log.Println("computed")
 					if err != nil {
+						log.Println(err.Error())
 						mealPrepEstimate = "15.00"
 					}
 

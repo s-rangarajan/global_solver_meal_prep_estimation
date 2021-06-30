@@ -52,6 +52,8 @@ func ComputeMealPrepTimeEstimatesWithContext(ctx context.Context, estimator Meal
 	computedValues, err := estimator.EstimateMealPrepTimeWithContext(ctx, computeRequest)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf(`{"error": "%s"}`, fmt.Errorf("error computing estimates: %w", err).Error())))
+		return
 	}
 
 	if err := json.NewEncoder(w).Encode(computedValues); err != nil {

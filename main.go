@@ -37,7 +37,9 @@ func main() {
 		if err != nil {
 			log.Fatalf(err.Error())
 		}
-		mealPrepEstimateLookuper.UpdateMealPrepEstimatesWithContext(ctx, f)
+		if err := mealPrepEstimateLookuper.UpdateMealPrepEstimatesWithContext(ctx, f); err != nil {
+			log.Println(err.Error())
+		}
 	}()
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
@@ -48,8 +50,11 @@ func main() {
 				updatedMealPrepEsimates, err := downloadMealPrepTimeEstimates(ctx, mealPrepTimeEstimatesS3Key, mealPrepTimeEstimatesS3Bucket, s3Downloader)
 				if err != nil {
 					log.Println(err.Error())
+					continue
 				}
-				mealPrepEstimateLookuper.UpdateMealPrepEstimatesWithContext(ctx, updatedMealPrepEsimates)
+				if err := mealPrepEstimateLookuper.UpdateMealPrepEstimatesWithContext(ctx, updatedMealPrepEsimates); err != nil {
+					log.Println(err.Error())
+				}
 			}
 		}
 	}()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +20,7 @@ import (
 
 const (
 	bucket      = "bucket"
-	commitCount = 10000
+	commitCount = 100000
 )
 
 type MealPrepTimeLookuper interface {
@@ -48,20 +50,38 @@ func (b *boltMealPrepTimeLookuper) LookupMealPrepTimeWithContext(_ context.Conte
 			return "", fmt.Errorf("error opening bolt connection over file: %w", err)
 		}
 	}
-
+	log.Println("here")
 	var mealPrepTime string
 	if err := b.connection.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
+		c := tx.Bucket([]byte(bucket)).Cursor()
 		if b == nil {
 			return fmt.Errorf("unable to find bucket in database")
 		}
-		dayOfWeek := dispatchTime.Weekday()
+		dayOfWeek := strconv.Itoa(int(dispatchTime.Weekday()))
 		h, m, _ := dispatchTime.Clock()
-		timeOfDay := h*60 + m
-		mealPrepTime = string(b.Get([]byte(makeMealPrepLookupKey(restaurantID, itemCount, string(dayOfWeek), string(timeOfDay)))))
+		timeOfDay := strconv.Itoa(h*60 + m)
+		prefix := []byte(mealMealPrepLookPrefix(restaurantID, itemCount, dayOfWeek))
+		fmt.Println(dispatchTime, dayOfWeek, h, m)
+		fmt.Println(string(prefix), timeOfDay)
+
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			log.Println(string(k), string(v))
+			parts := strings.Split(string(k), "|")
+			if len(parts) != 4 {
+				return fmt.Errorf("invalid keys in range scan")
+			}
+			if parts[3] > timeOfDay {
+				return nil
+			}
+			mealPrepTime = string(v)
+		}
 		return nil
 	}); err != nil {
 		return "", fmt.Errorf("error searching for meal prep time in database: %w", err)
+	}
+
+	if mealPrepTime == "" {
+		return "", fmt.Errorf("unable to find meal prep time for given restaurant/itemcount/time")
 	}
 
 	return mealPrepTime, nil
@@ -81,7 +101,6 @@ func (b *boltMealPrepTimeLookuper) UpdateMealPrepEstimatesWithContext(ctx contex
 	if err != nil {
 		return fmt.Errorf("error creating boltdb over tempfile: %w", err)
 	}
-	defer boltDB.Close()
 
 	tx, err := boltDB.Begin(true)
 	if err != nil {
@@ -116,27 +135,36 @@ func (b *boltMealPrepTimeLookuper) UpdateMealPrepEstimatesWithContext(ctx contex
 			}
 			bkt = tx.Bucket([]byte(bucket))
 			bkt.FillPercent = 1
-			log.Println("loaded ", commitCounter)
+			log.Println("loaded", commitCounter)
+			log.Println("key", makeMealPrepLookupKey(line[0], line[3], line[1], line[2]), "value", line[4])
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error committing bolt transaction: %w", err)
 	}
+	boltDB.Close()
+
+	log.Println("committed")
 
 	b.Lock()
 	defer b.Unlock()
 
+	log.Println("locked")
+
 	if b.connection != nil {
+		log.Println("closed")
 		b.connection.Close()
 	}
 	if err := os.Rename(tempFile.Name(), b.filePath); err != nil {
 		return fmt.Errorf("error renaming tempfile into permanent: %w", err)
 	}
-	b.connection, err = bolt.Open(b.filePath, 0600, &bolt.Options{ReadOnly: true})
+	log.Println("opening", b.filePath)
+	b.connection, err = bolt.Open(b.filePath, 0600, &bolt.Options{ReadOnly: true, Timeout: 1 * time.Second})
 	if err != nil {
 		return fmt.Errorf("error opening bolt connection over file: %w", err)
 	}
+	log.Println("open")
 
 	log.Println("loaded data")
 	return nil
@@ -144,13 +172,20 @@ func (b *boltMealPrepTimeLookuper) UpdateMealPrepEstimatesWithContext(ctx contex
 
 func makeMealPrepLookupKey(restaurantID, itemCount, dayOfWeek, timeOfDay string) string {
 	var sb strings.Builder
-	sb.WriteString(restaurantID)
-	sb.WriteString("|")
-	sb.WriteString(dayOfWeek)
+	sb.WriteString(mealMealPrepLookPrefix(restaurantID, itemCount, dayOfWeek))
 	sb.WriteString("|")
 	sb.WriteString(timeOfDay)
+
+	return sb.String()
+}
+
+func mealMealPrepLookPrefix(restaurantID, itemCount, dayOfWeek string) string {
+	var sb strings.Builder
+	sb.WriteString(restaurantID)
 	sb.WriteString("|")
 	sb.WriteString(itemCount)
+	sb.WriteString("|")
+	sb.WriteString(dayOfWeek)
 
 	return sb.String()
 }
